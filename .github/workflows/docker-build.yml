@@ -1,0 +1,220 @@
+name: Build & Push Docker Image
+
+# -----------------------------------------------------------------------
+# 触发条件：
+#   1. 推送到 master 分支（自动构建 latest 标签）
+#   2. 推送语义化版本 Tag（如 v2.1.0），自动构建对应版本标签
+#   3. 手动触发（workflow_dispatch），可选择是否同时推送 latest
+# -----------------------------------------------------------------------
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      push_latest:
+        description: '同时更新 latest 标签'
+        required: false
+        default: 'true'
+        type: boolean
+
+env:
+  # GitHub Container Registry 镜像路径
+  # 格式: ghcr.io/<owner>/<repo>
+  IMAGE_NAME: ghcr.io/ziztechnology/lsky-pro
+
+jobs:
+  build-and-push:
+    name: Build (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write   # 推送到 GHCR 所需权限
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+
+    steps:
+      # ------------------------------------------------------------------
+      # 1. 检出代码
+      # ------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # 2. 准备平台标识（用于 artifact 命名，斜杠不能出现在名称中）
+      # ------------------------------------------------------------------
+      - name: Prepare platform identifier
+        id: platform
+        run: |
+          PLATFORM_PAIR="${{ matrix.platform }}"
+          echo "pair=${PLATFORM_PAIR//\//-}" >> $GITHUB_OUTPUT
+
+      # ------------------------------------------------------------------
+      # 3. 登录 GitHub Container Registry
+      # ------------------------------------------------------------------
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ------------------------------------------------------------------
+      # 4. 提取镜像元数据（版本标签、OCI 标签）
+      # ------------------------------------------------------------------
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            # 推送 Tag 时：生成 v2.1.0 / 2.1.0 / 2.1 / 2 四种标签
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # master 分支：生成 latest 标签
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
+            # 每次提交：生成 sha-xxxxxxx 标签（便于追溯）
+            type=sha,prefix=sha-,format=short
+
+      # ------------------------------------------------------------------
+      # 5. 设置 QEMU（跨平台模拟，arm64 构建所需）
+      # ------------------------------------------------------------------
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # ------------------------------------------------------------------
+      # 6. 设置 Docker Buildx
+      # ------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ------------------------------------------------------------------
+      # 7. 构建并推送单平台镜像（输出为 OCI image 格式，供 merge 使用）
+      # ------------------------------------------------------------------
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 不直接 push，先输出 digest 供后续 manifest merge
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to:   type=gha,mode=max,scope=${{ matrix.platform }}
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+
+      # ------------------------------------------------------------------
+      # 8. 将 digest 输出为 artifact，供 merge job 使用
+      # ------------------------------------------------------------------
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ steps.platform.outputs.pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # -----------------------------------------------------------------------
+  # 合并多平台 manifest，生成最终多架构镜像
+  # -----------------------------------------------------------------------
+  merge-manifest:
+    name: Merge multi-platform manifest
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download all digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
+            type=sha,prefix=sha-,format=short
+
+      - name: Create and push multi-platform manifest
+        working-directory: /tmp/digests
+        run: |
+          # 将所有 digest 拼接为 imagetools create 的参数
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+      - name: Inspect final image
+        run: |
+          docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+
+  # -----------------------------------------------------------------------
+  # 可选：构建完成后通知（Webhook / 企业微信 / 钉钉）
+  # 如需启用，在仓库 Secrets 中配置 NOTIFY_WEBHOOK_URL
+  # -----------------------------------------------------------------------
+  notify:
+    name: Build notification
+    runs-on: ubuntu-latest
+    needs: merge-manifest
+    if: always()
+
+    steps:
+      - name: Send build status notification
+        if: vars.NOTIFY_WEBHOOK_URL != ''
+        env:
+          WEBHOOK_URL: ${{ vars.NOTIFY_WEBHOOK_URL }}
+          STATUS: ${{ needs.merge-manifest.result }}
+          REF: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          STATUS_EMOJI="✅"
+          [ "${STATUS}" != "success" ] && STATUS_EMOJI="❌"
+          curl -s -X POST "${WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"msgtype\": \"text\",
+              \"text\": {
+                \"content\": \"${STATUS_EMOJI} lsky-pro 镜像构建${STATUS}\n分支/Tag: ${REF}\nCommit: ${SHA:0:7}\n操作者: ${ACTOR}\n镜像: ghcr.io/ziztechnology/lsky-pro:latest\"
+              }
+            }" || true
