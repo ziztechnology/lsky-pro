@@ -20,6 +20,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Controllers\User\UserController;
 use App\Http\Controllers\User\ImageController;
 use App\Http\Controllers\User\AlbumController;
+use App\Http\Controllers\User\AlbumAuthorizationController;
 use App\Http\Controllers\Common\GalleryController;
 use App\Http\Controllers\Common\ApiController;
 
@@ -67,6 +68,18 @@ Route::group(['middleware' => ['auth']], function () {
         Route::post('albums', [AlbumController::class, 'create'])->name('user.album.create');
         Route::put('albums/{id}', [AlbumController::class, 'update'])->name('user.album.update');
         Route::delete('albums/{id}', [AlbumController::class, 'delete'])->name('user.album.delete');
+
+        // 相册授权相关路由
+        // 获取当前用户被授权访问的相册列表
+        Route::get('authorized-albums', [AlbumAuthorizationController::class, 'myAuthorizedAlbums'])->name('user.authorized-albums');
+        // 获取被授权相册中的图片列表
+        Route::get('authorized-albums/{id}/images', [AlbumAuthorizationController::class, 'authorizedAlbumImages'])->name('user.authorized-album.images');
+        // 获取指定相册已授权的用户列表（相册所有者操作）
+        Route::get('albums/{id}/authorized-users', [AlbumAuthorizationController::class, 'authorizedUsers'])->name('user.album.authorized-users');
+        // 授权用户访问相册
+        Route::post('albums/{id}/authorize', [AlbumAuthorizationController::class, 'authorize'])->name('user.album.authorize');
+        // 取消授权
+        Route::delete('albums/{id}/authorize/{user_id}', [AlbumAuthorizationController::class, 'revoke'])->name('user.album.revoke');
     });
 });
 

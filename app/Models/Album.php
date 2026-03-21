@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Http\Request;
 
@@ -17,6 +18,7 @@ use Illuminate\Http\Request;
  * @property int $image_num
  * @property-read User $user
  * @property-read Collection $images
+ * @property-read Collection $authorizedUsers
  */
 class Album extends Model
 {
@@ -71,5 +73,18 @@ class Album extends Model
     public function images(): HasMany
     {
         return $this->hasMany(Image::class, 'album_id', 'id');
+    }
+
+    /**
+     * 被授权访问该相册的用户（多对多）
+     */
+    public function authorizedUsers(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            User::class,
+            'album_user_authorizations',
+            'album_id',
+            'user_id'
+        )->withTimestamps();
     }
 }

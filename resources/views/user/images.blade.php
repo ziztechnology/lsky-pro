@@ -126,11 +126,48 @@
         <a href="javascript:void(0)" data-id="__id__" data-json='__json__' title="__intro__" class="albums-item flex justify-between items-center group px-2 h-7 rounded w-full bg-gray-100 text-gray-800 hover:bg-blue-300 hover:text-white">
             <span class="text-sm truncate w-[80%] name">__name__</span>
             <div class="flex items-center justify-center space-x-1 hidden group-hover:block">
+                <span class="authorize" title="授权管理"><i class="fas fa-user-plus text-xs text-green-500"></i></span>
                 <span class="update"><i class="fas fa-edit text-xs"></i></span>
                 <span class="delete"><i class="fas fa-trash-alt text-xs text-red-400"></i></span>
             </div>
             <span class="group-hover:hidden text-xs">__image_num__</span>
         </a>
+    </script>
+
+    {{-- 被授权相册列表模板 --}}
+    <script type="text/html" id="authorized-albums-item-tpl">
+        <a href="javascript:void(0)" data-id="__id__" data-json='__json__' title="来自: __owner_name__" class="authorized-albums-item flex justify-between items-center group px-2 h-7 rounded w-full bg-blue-50 text-blue-700 hover:bg-blue-300 hover:text-white">
+            <span class="text-sm truncate w-[80%] name"><i class="fas fa-share-alt text-xs mr-1"></i>__name__</span>
+            <span class="group-hover:hidden text-xs">__image_num__</span>
+        </a>
+    </script>
+
+    {{-- 授权管理内容模板 --}}
+    <script type="text/html" id="album-authorize-tpl">
+        <div id="album-authorize-container" data-album-id="__album_id__" class="flex flex-col w-full p-3 space-y-3">
+            <div class="border rounded p-2">
+                <p class="text-xs text-gray-500 mb-2">输入用户邮箱以授权访问此相册</p>
+                <p class="error-message text-white p-2 mb-2 text-sm bg-red-500 rounded hidden"></p>
+                <div class="flex space-x-1">
+                    <input type="email" class="flex-1 rounded px-2 py-1 text-sm border bg-gray-50" id="authorize-email-input" placeholder="输入邮箱地址">
+                    <button id="authorize-submit-btn" class="px-3 py-1 bg-indigo-500 text-white text-sm rounded hover:bg-indigo-600">授权</button>
+                </div>
+            </div>
+            <div id="authorized-users-list" class="flex flex-col space-y-1">
+                <p class="text-xs text-gray-400">已授权用户</p>
+            </div>
+        </div>
+    </script>
+
+    {{-- 已授权用户列表项模板 --}}
+    <script type="text/html" id="authorized-user-item-tpl">
+        <div class="flex justify-between items-center px-2 py-1 rounded bg-gray-50 text-sm">
+            <div class="flex flex-col">
+                <span class="text-gray-800 font-medium">__name__</span>
+                <span class="text-gray-500 text-xs">__email__</span>
+            </div>
+            <button class="revoke-btn text-red-400 hover:text-red-600 text-xs px-2 py-1" data-user-id="__user_id__">取消</button>
+        </div>
     </script>
 
     <script type="text/html" id="album-update-tpl">
@@ -409,6 +446,18 @@
                         })
                     });
 
+                    // 授权管理按钮点击
+                    $albums.off('click', '.authorize').on('click', '.authorize', function (e) {
+                        e.stopPropagation();
+                        let $item = $(this).closest('a.albums-item');
+                        let albumId = $item.data('id');
+                        let albumName = $item.find('.name').text();
+                        openAuthorizePanel(albumId, albumName);
+                    });
+
+                    // 加载被授权的相册列表（共享给我的相册）
+                    loadAuthorizedAlbums($albums);
+
                     // confirm create
                     $albums.off('submit', CREATE_ID + ' form').on('submit', CREATE_ID + ' form', function (e) {
                         e.preventDefault();
@@ -443,6 +492,148 @@
                     });
                 });
             }
+
+            /**
+             * 打开授权管理面板
+             */
+            const openAuthorizePanel = (albumId, albumName) => {
+                let content = $('#album-authorize-tpl').html()
+                    .replace(/__album_id__/g, albumId);
+                drawer.open(`授权管理: ${albumName}`, content, function () {
+                    let $container = $('#album-authorize-container');
+                    let $usersList = $('#authorized-users-list');
+                    let $errorMsg = $container.find('.error-message');
+
+                    // 加载已授权用户列表
+                    const loadAuthorizedUsers = () => {
+                        axios.get(`/user/albums/${albumId}/authorized-users`).then(response => {
+                            if (response.data.status) {
+                                let users = response.data.data.authorizedUsers;
+                                $usersList.find('.user-item').remove();
+                                if (users.length === 0) {
+                                    $usersList.find('.no-users-tip').remove();
+                                    $usersList.append('<p class="no-users-tip text-xs text-gray-400 italic">暂无授权用户</p>');
+                                } else {
+                                    $usersList.find('.no-users-tip').remove();
+                                    users.forEach(user => {
+                                        let item = $('#authorized-user-item-tpl').html()
+                                            .replace(/__name__/g, user.name)
+                                            .replace(/__email__/g, user.email)
+                                            .replace(/__user_id__/g, user.id);
+                                        $usersList.append(`<div class="user-item">${item}</div>`);
+                                    });
+                                }
+                            }
+                        });
+                    };
+                    loadAuthorizedUsers();
+
+                    // 授权提交
+                    $('#authorize-submit-btn').off('click').on('click', function () {
+                        let email = $('#authorize-email-input').val().trim();
+                        if (!email) {
+                            $errorMsg.text('请输入邮箱地址').show();
+                            return;
+                        }
+                        $errorMsg.hide();
+                        axios.post(`/user/albums/${albumId}/authorize`, {email: email}).then(response => {
+                            if (response.data.status) {
+                                $('#authorize-email-input').val('');
+                                toastr.success(response.data.message);
+                                loadAuthorizedUsers();
+                            } else {
+                                $errorMsg.text(response.data.message).show();
+                            }
+                        });
+                    });
+
+                    // 取消授权
+                    $usersList.off('click', '.revoke-btn').on('click', '.revoke-btn', function () {
+                        let userId = $(this).data('user-id');
+                        axios.delete(`/user/albums/${albumId}/authorize/${userId}`).then(response => {
+                            if (response.data.status) {
+                                toastr.success(response.data.message);
+                                loadAuthorizedUsers();
+                            } else {
+                                toastr.error(response.data.message);
+                            }
+                        });
+                    });
+                });
+            };
+
+            /**
+             * 加载共享给我的相册列表，展示在我的相册列表下方
+             */
+            const loadAuthorizedAlbums = ($albums) => {
+                axios.get('{{ route('user.authorized-albums') }}').then(response => {
+                    if (!response.data.status) return;
+                    let albums = response.data.data.albums.data;
+                    if (albums.length === 0) return;
+
+                    // 添加分隔标题
+                    $albums.append('<p class="text-gray-400 text-xs mx-1 mt-2 mb-1">共享给我的</p>');
+
+                    albums.forEach(album => {
+                        let item = $('#authorized-albums-item-tpl').html()
+                            .replace(/__id__/g, album.id)
+                            .replace(/__name__/g, album.name)
+                            .replace(/__intro__/g, album.intro || '')
+                            .replace(/__image_num__/g, album.image_num)
+                            .replace(/__owner_name__/g, album.user ? album.user.name : '未知')
+                            .replace(/__json__/g, JSON.stringify({id: album.id, name: album.name, shared: true}));
+                        $albums.append(item);
+                    });
+
+                    // 被授权相册点击事件
+                    $albums.off('click', '.authorized-albums-item').on('click', '.authorized-albums-item', function () {
+                        let albumData = $(this).data('json');
+                        selectedAlbum = albumData;
+                        // 使用被授权相册的图片接口
+                        resetAuthorizedImages(albumData.id);
+                        drawer.close();
+                        ds.clearSelection();
+                    });
+                });
+            };
+
+            /**
+             * 加载被授权相册的图片
+             */
+            const resetAuthorizedImages = (albumId) => {
+                $photos.addClass('reset').html('').justifiedGallery('destroy');
+                ds.clearSelection();
+                // 被授权相册图片只读，不显示操作按钮
+                $('[data-operate]').hide();
+                $headerTitle.text('共享相册图片');
+
+                axios.get(`/user/authorized-albums/${albumId}/images?page=1`).then(response => {
+                    if (!response.data.status) {
+                        return toastr.error(response.data.message);
+                    }
+                    let images = response.data.data.images.data;
+                    let html = '';
+                    for (const i in images) {
+                        html += $('#images-item-tpl').html()
+                            .replace(/__id__/g, images[i].id)
+                            .replace(/__name__/g, images[i].filename.replace(/\$/g, '$$$$'))
+                            .replace(/__human_date__/g, images[i].human_date)
+                            .replace(/__date__/g, images[i].date)
+                            .replace(/__url__/g, images[i].url)
+                            .replace(/__thumb_url__/g, images[i].thumb_url)
+                            .replace(/__width__/g, images[i].width)
+                            .replace(/__height__/g, images[i].height)
+                            .replace(/__json__/g, JSON.stringify(images[i]).replace(/\$/g, '$$$$'));
+                    }
+                    $photos.append(html);
+                    ds.setSelectables($photos.find(IMAGES_ITEM));
+                    if ($photos.html() !== '') {
+                        $photos.justifiedGallery(gridConfigs).removeClass('reset');
+                        $photos.justifiedGallery('norewind');
+                        viewer.update();
+                    }
+                });
+            };
 
             const setOrderBy = function (sort) {
                 resetImages({page: 1, order: sort})

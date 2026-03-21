@@ -9,6 +9,7 @@ use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -38,6 +39,7 @@ use Laravel\Sanctum\HasApiTokens;
  * @property-read Group $group
  * @property-read \Illuminate\Database\Eloquent\Collection $albums
  * @property-read \Illuminate\Database\Eloquent\Collection $images
+ * @property-read \Illuminate\Database\Eloquent\Collection $authorizedAlbums
  */
 class User extends Authenticatable implements MustVerifyEmail
 {
@@ -126,5 +128,18 @@ class User extends Authenticatable implements MustVerifyEmail
     public function images(): HasMany
     {
         return $this->hasMany(Image::class, 'user_id', 'id');
+    }
+
+    /**
+     * 该用户被授权访问的相册（多对多）
+     */
+    public function authorizedAlbums(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Album::class,
+            'album_user_authorizations',
+            'user_id',
+            'album_id'
+        )->withTimestamps();
     }
 }
