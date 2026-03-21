@@ -80,6 +80,8 @@ Route::group(['middleware' => ['auth']], function () {
         Route::post('albums/{id}/authorize', [AlbumAuthorizationController::class, 'authorize'])->name('user.album.authorize');
         // 取消授权
         Route::delete('albums/{id}/authorize/{user_id}', [AlbumAuthorizationController::class, 'revoke'])->name('user.album.revoke');
+        // 究极权限：删除被授权相册中的图片
+        Route::delete('authorized-albums/{id}/images', [AlbumAuthorizationController::class, 'deleteAuthorizedAlbumImages'])->name('user.authorized-album.images.delete');
     });
 });
 

@@ -140,6 +140,6 @@ class User extends Authenticatable implements MustVerifyEmail
             'album_user_authorizations',
             'user_id',
             'album_id'
-        )->withTimestamps();
+        )->withPivot('permission_level')->withTimestamps();
     }
 }

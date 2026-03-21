@@ -85,6 +85,6 @@ class Album extends Model
             'album_user_authorizations',
             'album_id',
             'user_id'
-        )->withTimestamps();
+        )->withPivot('permission_level')->withTimestamps();
     }
 }

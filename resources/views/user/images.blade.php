@@ -17,6 +17,9 @@
                 <a data-operate="detail" class="hidden text-sm py-2 px-3 hover:bg-gray-100 rounded text-gray-800" href="javascript:void(0)">详细信息</a>
                 <a data-operate="rename" class="hidden text-sm py-2 px-3 hover:bg-gray-100 rounded text-gray-800" href="javascript:void(0)">重命名</a>
                 <a data-operate="delete" class="hidden text-sm py-2 px-3 hover:bg-gray-100 rounded text-gray-800" href="javascript:void(0)">删除</a>
+                {{-- 共享相册专用按钮：高级权限下载，究极权限删除 --}}
+                <a data-operate="shared-download" class="hidden text-sm py-2 px-3 hover:bg-gray-100 rounded text-yellow-600" href="javascript:void(0)"><i class="fas fa-download text-xs mr-1"></i>下载</a>
+                <a data-operate="shared-delete" class="hidden text-sm py-2 px-3 hover:bg-gray-100 rounded text-red-500" href="javascript:void(0)"><i class="fas fa-trash-alt text-xs mr-1"></i>删除</a>
             </div>
             <div class="block lg:hidden">
                 <x-dropdown direction="right">
@@ -32,6 +35,8 @@
                         <x-dropdown-link data-operate="detail" class="hidden" href="javascript:void(0)" @click="open = false">详细信息</x-dropdown-link>
                         <x-dropdown-link data-operate="rename" class="hidden" href="javascript:void(0)" @click="open = false">重命名</x-dropdown-link>
                         <x-dropdown-link data-operate="delete" class="hidden" href="javascript:void(0)" @click="open = false">删除</x-dropdown-link>
+                        <x-dropdown-link data-operate="shared-download" class="hidden" href="javascript:void(0)" @click="open = false">下载（共享）</x-dropdown-link>
+                        <x-dropdown-link data-operate="shared-delete" class="hidden" href="javascript:void(0)" @click="open = false">删除（共享）</x-dropdown-link>
                     </x-slot>
                 </x-dropdown>
             </div>
@@ -145,28 +150,37 @@
     {{-- 授权管理内容模板 --}}
     <script type="text/html" id="album-authorize-tpl">
         <div id="album-authorize-container" data-album-id="__album_id__" class="flex flex-col w-full p-3 space-y-3">
-            <div class="border rounded p-2">
-                <p class="text-xs text-gray-500 mb-2">输入用户邮箱以授权访问此相册</p>
-                <p class="error-message text-white p-2 mb-2 text-sm bg-red-500 rounded hidden"></p>
+            <div class="border rounded p-2 space-y-2">
+                <p class="text-xs text-gray-500">输入用户邮箱并选择权限级别</p>
+                <p class="error-message text-white p-2 text-sm bg-red-500 rounded hidden"></p>
+                <input type="email" class="w-full rounded px-2 py-1 text-sm border bg-gray-50" id="authorize-email-input" placeholder="输入邮箱地址">
                 <div class="flex space-x-1">
-                    <input type="email" class="flex-1 rounded px-2 py-1 text-sm border bg-gray-50" id="authorize-email-input" placeholder="输入邮箱地址">
-                    <button id="authorize-submit-btn" class="px-3 py-1 bg-indigo-500 text-white text-sm rounded hover:bg-indigo-600">授权</button>
+                    <select id="authorize-level-select" class="flex-1 rounded px-2 py-1 text-sm border bg-gray-50">
+                        <option value="1">👁 只读 &mdash; 仅可浏览</option>
+                        <option value="2">⭐ 高级 &mdash; 浏览 + 下载</option>
+                        <option value="3">🔥 究极 &mdash; 浏览 + 下载 + 删除</option>
+                    </select>
+                    <button id="authorize-submit-btn" class="px-3 py-1 bg-indigo-500 text-white text-sm rounded hover:bg-indigo-600 whitespace-nowrap">确认授权</button>
                 </div>
             </div>
             <div id="authorized-users-list" class="flex flex-col space-y-1">
-                <p class="text-xs text-gray-400">已授权用户</p>
+                <p class="text-xs text-gray-400 mb-1">已授权用户</p>
             </div>
         </div>
     </script>
 
     {{-- 已授权用户列表项模板 --}}
     <script type="text/html" id="authorized-user-item-tpl">
-        <div class="flex justify-between items-center px-2 py-1 rounded bg-gray-50 text-sm">
-            <div class="flex flex-col">
-                <span class="text-gray-800 font-medium">__name__</span>
-                <span class="text-gray-500 text-xs">__email__</span>
+        <div class="flex justify-between items-center px-2 py-1 rounded bg-gray-50 text-sm" data-user-id="__user_id__">
+            <div class="flex flex-col flex-1 min-w-0 mr-2">
+                <span class="text-gray-800 font-medium truncate">__name__</span>
+                <span class="text-gray-500 text-xs truncate">__email__</span>
             </div>
-            <button class="revoke-btn text-red-400 hover:text-red-600 text-xs px-2 py-1" data-user-id="__user_id__">取消</button>
+            <div class="flex items-center space-x-1 shrink-0">
+                <span class="permission-badge text-xs px-1.5 py-0.5 rounded font-medium __badge_class__">__permission_label__</span>
+                <button class="change-level-btn text-blue-400 hover:text-blue-600 text-xs px-1 py-0.5" data-user-id="__user_id__" data-current-level="__permission_level__" title="修改权限">改</button>
+                <button class="revoke-btn text-red-400 hover:text-red-600 text-xs px-1 py-0.5" data-user-id="__user_id__">取消</button>
+            </div>
         </div>
     </script>
 
@@ -494,6 +508,15 @@
             }
 
             /**
+             * 权限级别对应的强调样式
+             */
+            const levelBadgeClass = (level) => {
+                if (level === 3) return 'bg-red-100 text-red-600';    // 究极
+                if (level === 2) return 'bg-yellow-100 text-yellow-700'; // 高级
+                return 'bg-gray-100 text-gray-500';                     // 只读
+            };
+
+            /**
              * 打开授权管理面板
              */
             const openAuthorizePanel = (albumId, albumName) => {
@@ -516,10 +539,14 @@
                                 } else {
                                     $usersList.find('.no-users-tip').remove();
                                     users.forEach(user => {
+                                        let badgeClass = levelBadgeClass(user.permission_level);
                                         let item = $('#authorized-user-item-tpl').html()
                                             .replace(/__name__/g, user.name)
                                             .replace(/__email__/g, user.email)
-                                            .replace(/__user_id__/g, user.id);
+                                            .replace(/__user_id__/g, user.id)
+                                            .replace(/__permission_level__/g, user.permission_level)
+                                            .replace(/__permission_label__/g, user.permission_label)
+                                            .replace(/__badge_class__/g, badgeClass);
                                         $usersList.append(`<div class="user-item">${item}</div>`);
                                     });
                                 }
@@ -528,21 +555,60 @@
                     };
                     loadAuthorizedUsers();
 
-                    // 授权提交
+                    // 授权提交（含权限级别）
                     $('#authorize-submit-btn').off('click').on('click', function () {
                         let email = $('#authorize-email-input').val().trim();
+                        let level = parseInt($('#authorize-level-select').val()) || 1;
                         if (!email) {
                             $errorMsg.text('请输入邮箱地址').show();
                             return;
                         }
                         $errorMsg.hide();
-                        axios.post(`/user/albums/${albumId}/authorize`, {email: email}).then(response => {
+                        axios.post(`/user/albums/${albumId}/authorize`, {email: email, permission_level: level}).then(response => {
                             if (response.data.status) {
                                 $('#authorize-email-input').val('');
+                                $('#authorize-level-select').val('1');
                                 toastr.success(response.data.message);
                                 loadAuthorizedUsers();
                             } else {
                                 $errorMsg.text(response.data.message).show();
+                            }
+                        });
+                    });
+
+                    // 修改权限级别
+                    $usersList.off('click', '.change-level-btn').on('click', '.change-level-btn', function () {
+                        let userId = $(this).data('user-id');
+                        let currentLevel = parseInt($(this).data('current-level')) || 1;
+                        Swal.fire({
+                            title: '修改权限级别',
+                            input: 'select',
+                            inputOptions: {
+                                1: '👁 只读 — 仅可浏览',
+                                2: '⭐ 高级 — 浏览 + 下载',
+                                3: '🔥 究极 — 浏览 + 下载 + 删除',
+                            },
+                            inputValue: currentLevel,
+                            showCancelButton: true,
+                            confirmButtonText: '确认修改',
+                            cancelButtonText: '取消',
+                        }).then(result => {
+                            if (result.isConfirmed) {
+                                let newLevel = parseInt(result.value);
+                                // 通迁授权接口传入已授权用户的邮箱来更新级别
+                                let $userRow = $usersList.find(`[data-user-id="${userId}"]`);
+                                let email = $userRow.find('.text-gray-500').text();
+                                axios.post(`/user/albums/${albumId}/authorize`, {
+                                    email: email,
+                                    permission_level: newLevel
+                                }).then(response => {
+                                    if (response.data.status) {
+                                        toastr.success(response.data.message);
+                                        loadAuthorizedUsers();
+                                    } else {
+                                        toastr.error(response.data.message);
+                                    }
+                                });
                             }
                         });
                     });
@@ -575,13 +641,21 @@
                     $albums.append('<p class="text-gray-400 text-xs mx-1 mt-2 mb-1">共享给我的</p>');
 
                     albums.forEach(album => {
+                        let albumJson = {
+                            id: album.id,
+                            name: album.name,
+                            shared: true,
+                            permission_level: album.permission_level,
+                            permission_label: album.permission_label,
+                            abilities: album.abilities,
+                        };
                         let item = $('#authorized-albums-item-tpl').html()
                             .replace(/__id__/g, album.id)
                             .replace(/__name__/g, album.name)
                             .replace(/__intro__/g, album.intro || '')
                             .replace(/__image_num__/g, album.image_num)
                             .replace(/__owner_name__/g, album.user ? album.user.name : '未知')
-                            .replace(/__json__/g, JSON.stringify({id: album.id, name: album.name, shared: true}));
+                            .replace(/__json__/g, JSON.stringify(albumJson));
                         $albums.append(item);
                     });
 
@@ -589,8 +663,8 @@
                     $albums.off('click', '.authorized-albums-item').on('click', '.authorized-albums-item', function () {
                         let albumData = $(this).data('json');
                         selectedAlbum = albumData;
-                        // 使用被授权相册的图片接口
-                        resetAuthorizedImages(albumData.id);
+                        // 传入完整 albumData（含权限信息）给 resetAuthorizedImages
+                        resetAuthorizedImages(albumData.id, albumData);
                         drawer.close();
                         ds.clearSelection();
                     });
@@ -598,14 +672,18 @@
             };
 
             /**
-             * 加载被授权相册的图片
+             * 加载被授权相册的图片，并根据权限级别显示对应操作按钮
+             * @param {number} albumId
+             * @param {object} albumData  包含 permission_level, abilities 等字段
              */
-            const resetAuthorizedImages = (albumId) => {
+            const resetAuthorizedImages = (albumId, albumData) => {
                 $photos.addClass('reset').html('').justifiedGallery('destroy');
                 ds.clearSelection();
-                // 被授权相册图片只读，不显示操作按钮
                 $('[data-operate]').hide();
-                $headerTitle.text('共享相册图片');
+
+                let abilities = (albumData && albumData.abilities) ? albumData.abilities : ['view'];
+                let permLabel = (albumData && albumData.permission_label) ? albumData.permission_label : '只读';
+                $headerTitle.text(`共享相册图片（${permLabel}）`);
 
                 axios.get(`/user/authorized-albums/${albumId}/images?page=1`).then(response => {
                     if (!response.data.status) {
@@ -632,6 +710,65 @@
                         $photos.justifiedGallery('norewind');
                         viewer.update();
                     }
+
+                    // 根据权限级别显示可用操作按钮
+                    // 所有级别都开放：刷新、复制链接、查看详情
+                    $('[data-operate="refresh"]').show();
+
+                    // 高级 + 究极：开放下载按钮
+                    if (abilities.includes('download')) {
+                        $('[data-operate="shared-download"]').show();
+                    }
+
+                    // 究极：开放删除按钮
+                    if (abilities.includes('delete')) {
+                        // 绑定删除事件（使用共享相册删除接口）
+                        $('[data-operate="shared-delete"]').show();
+                        $('[data-operate="shared-delete"]').off('click.shared').on('click.shared', function () {
+                            let selected = ds.getSelection();
+                            if (!selected.length) return;
+                            Swal.fire({
+                                title: '确认删除选中的图片？',
+                                text: '删除后不可恢复，记录和文件同时删除',
+                                icon: 'warning',
+                                showCancelButton: true,
+                                confirmButtonText: '确认删除',
+                                cancelButtonText: '取消',
+                            }).then(result => {
+                                if (result.isConfirmed) {
+                                    let ids = selected.map(item => $(item).data('id'));
+                                    axios.delete(`/user/authorized-albums/${albumId}/images`, {
+                                        data: ids,
+                                    }).then(response => {
+                                        if (response.data.status) {
+                                            selected.forEach(item => $(item).remove());
+                                            $headerTitle.text(`共享相册图片（${permLabel}）`);
+                                            $photos.justifiedGallery(gridConfigs).removeClass('reset');
+                                            toastr.success(response.data.message);
+                                        } else {
+                                            toastr.warning(response.data.message);
+                                        }
+                                    });
+                                }
+                            });
+                        });
+                    }
+
+                    // 高级和究极：下载按钮实现
+                    $('[data-operate="shared-download"]').off('click.shared').on('click.shared', function () {
+                        let selected = ds.getSelection();
+                        if (!selected.length) return;
+                        selected.forEach(item => {
+                            let data = $(item).data('json');
+                            let a = document.createElement('a');
+                            a.href = data.url;
+                            a.download = data.filename;
+                            a.target = '_blank';
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                        });
+                    });
                 });
             };
 
