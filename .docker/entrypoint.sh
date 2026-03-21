@@ -38,11 +38,22 @@ if [ -f "${IMAGE_VERSION_FILE}" ]; then
 
     if [ "${IMAGE_VERSION}" != "${VOLUME_VERSION}" ]; then
         echo "[entrypoint] 检测到版本更新: ${VOLUME_VERSION} -> ${IMAGE_VERSION}，正在同步代码..."
-        # 同步除 .env / storage / database 之外的所有文件
-        rsync -a --exclude='.env' \
-                 --exclude='storage/' \
-                 --exclude='database/database.sqlite' \
-                 /var/www/lsky/. /var/www/html/
+        # 同步代码：先备份需要保留的文件，全量覆盖后再还原
+        # 备份持久化数据
+        [ -f /var/www/html/.env ]                        && cp /var/www/html/.env                        /tmp/lsky_env_backup
+        [ -d /var/www/html/storage ]                     && cp -a /var/www/html/storage                  /tmp/lsky_storage_backup
+        [ -f /var/www/html/database/database.sqlite ]    && cp /var/www/html/database/database.sqlite    /tmp/lsky_sqlite_backup
+
+        # 全量覆盖（镜像代码 -> 挂载卷）
+        cp -a /var/www/lsky/. /var/www/html/
+
+        # 还原持久化数据（覆盖镜像内的空占位）
+        [ -f /tmp/lsky_env_backup ]     && cp /tmp/lsky_env_backup     /var/www/html/.env
+        [ -d /tmp/lsky_storage_backup ] && cp -a /tmp/lsky_storage_backup/. /var/www/html/storage/
+        [ -f /tmp/lsky_sqlite_backup ]  && cp /tmp/lsky_sqlite_backup  /var/www/html/database/database.sqlite
+
+        # 清理临时备份
+        rm -rf /tmp/lsky_env_backup /tmp/lsky_storage_backup /tmp/lsky_sqlite_backup
         echo "[entrypoint] 代码同步完成"
     fi
 fi
