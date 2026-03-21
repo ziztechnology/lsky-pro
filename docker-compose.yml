@@ -1,0 +1,86 @@
+# =============================================================================
+# Lsky Pro - Ziztechnology 生产部署配置
+# 镜像由 GitHub Actions 自动构建并推送至 GHCR
+# 部署平台：1Panel（外部网络 1panel-network）
+# NAS 存储：群晖 //10.31.0.106/lsky-pro（CIFS 挂载）
+# =============================================================================
+
+services:
+  lsky-pro:
+    # -----------------------------------------------------------------------
+    # 使用自建镜像（GitHub Actions 构建推送至 GHCR）
+    # 如需固定版本，将 latest 替换为具体版本号，如 v2.1.0
+    # -----------------------------------------------------------------------
+    image: ghcr.io/ziztechnology/lsky-pro:latest
+
+    container_name: lsky-pro
+    hostname: lsky-pro
+
+    restart: unless-stopped
+
+    ports:
+      - "40027:8089"
+
+    environment:
+      - WEB_PORT=8089
+      # 如需 HTTPS 支持，取消注释并配置反向代理
+      # - HTTPS_PORT=8088
+
+    volumes:
+      # 应用数据卷：存放 .env、storage、database 等持久化数据
+      # 首次启动时 entrypoint 会自动从镜像初始化此目录
+      - $PWD/web:/var/www/html/
+
+      # NAS 存储挂载：群晖 SMB 共享，用于图片存储
+      # 注意：此卷需要宿主机安装 cifs-utils（1Panel 环境通常已预装）
+      - nas-share:/mnt/ziztech_storage.lan/
+
+    healthcheck:
+      # 检查 Apache 是否正常响应（使用内部端口）
+      test: ["CMD", "curl", "-f", "http://localhost:8089/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s   # 首次启动需要初始化，给予更长等待时间
+
+    # 资源限制（根据实际服务器配置调整）
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+# =============================================================================
+# 网络配置：接入 1Panel 管理的外部网络
+# =============================================================================
+networks:
+  default:
+    external: true
+    name: 1panel-network
+
+# =============================================================================
+# 卷配置：CIFS 挂载群晖 NAS
+# 凭据建议迁移到 Docker Secrets 或环境变量文件（.env）以避免明文存储
+# =============================================================================
+volumes:
+  nas-share:
+    driver: local
+    driver_opts:
+      type: cifs
+      # NAS 地址和共享路径
+      device: "//10.31.0.106/lsky-pro"
+      # 挂载选项：
+      #   username/password: SMB 认证凭据
+      #   vers=3.0:          SMB 协议版本（群晖推荐 3.0）
+      #   iocharset=utf8:    中文文件名支持
+      #   file_mode/dir_mode: 确保容器内 www-data 可读写
+      #   uid/gid=33:        www-data 的 UID/GID（Debian/Ubuntu 标准值）
+      #   noperm:            跳过客户端权限检查（NAS 端已控制权限时使用）
+      o: "username=BobYoung,password=Dyrxb792,vers=3.0,iocharset=utf8,file_mode=0777,dir_mode=0777,uid=33,gid=33,noperm"

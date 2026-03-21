@@ -1,0 +1,38 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# CI/CD
+.github
+
+# 开发工具
+.editorconfig
+.phpunit.result.cache
+phpunit.xml
+CHANGELOG.md
+README.md
+
+# Node.js 开发依赖（生产镜像不需要）
+node_modules
+
+# Laravel 本地开发文件
+.env
+.env.local
+.env.*.local
+
+# 测试
+tests
+/storage/logs
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Docker 自身（避免递归复制）
+Dockerfile
+.dockerignore
+docker-compose*.yml
+docker-compose*.yaml
