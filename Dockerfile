@@ -41,7 +41,11 @@ RUN php -r "file_exists('.env') || copy('.env.example', '.env');" && \
         --no-scripts \
         --no-progress \
         --optimize-autoloader \
-        --prefer-dist
+        --prefer-dist && \
+    # 彻底删除 debugbar（dev 依赖，--no-dev 后仍可能残留自动发现缓存）
+    rm -rf vendor/barryvdh/laravel-debugbar && \
+    # 重新生成 autoload（不含 debugbar）
+    composer dump-autoload --optimize --no-dev
 
 # =============================================================================
 # Stage 3: 生产运行镜像（Nginx + PHP-FPM，纯 HTTP，无 SSL）
@@ -89,7 +93,7 @@ RUN apt-get update && \
     chown -R www-data:www-data /var/www
 
 # --------------------------------------------------------------------------
-# PHP-FPM 配置（覆盖默认 www.conf，使用 Unix socket）
+# PHP-FPM 配置（覆盖默认 www.conf，使用 TCP 9000）
 # --------------------------------------------------------------------------
 COPY .docker/php-fpm-www.conf /usr/local/etc/php-fpm.d/www.conf
 

@@ -10,9 +10,6 @@ envsubst '${WEB_PORT}' \
     < /etc/nginx/conf.d/default.conf.template \
     > /etc/nginx/conf.d/default.conf
 
-# 确保 PHP-FPM socket 目录存在
-mkdir -p /var/run/php
-
 # -----------------------------------------------------------------------
 # 首次初始化：将镜像内的应用代码同步到挂载卷
 # -----------------------------------------------------------------------
@@ -51,6 +48,8 @@ if [ -f "${IMAGE_VERSION_FILE}" ]; then
         [ -f /tmp/lsky_sqlite_backup ]  && cp    /tmp/lsky_sqlite_backup             /var/www/html/database/database.sqlite
 
         rm -rf /tmp/lsky_env_backup /tmp/lsky_storage_backup /tmp/lsky_sqlite_backup
+        # 确保删除旧卷中可能残留的 debugbar
+        rm -rf /var/www/html/vendor/barryvdh/laravel-debugbar
         echo "[entrypoint] 代码同步完成"
     fi
 fi
