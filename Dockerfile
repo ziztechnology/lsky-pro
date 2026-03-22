@@ -17,7 +17,7 @@ RUN npm run production
 # =============================================================================
 FROM php:8.1 AS composer-builder
 
-WORKDIR /build
+WORKDIR /app
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl unzip git && \
@@ -29,11 +29,11 @@ RUN apt-get update && \
 COPY . .
 
 # 覆盖前端构建产物
-COPY --from=node-builder /app/public/js               ./public/js
-COPY --from=node-builder /app/public/css              ./public/css
+COPY --from=node-builder /app/public/js                ./public/js
+COPY --from=node-builder /app/public/css               ./public/css
 COPY --from=node-builder /app/public/mix-manifest.json ./public/mix-manifest.json
 
-# 安装生产依赖（不含 dev 包）
+# 安装生产依赖（不含 dev 包），彻底删除 debugbar
 RUN php -r "file_exists('.env') || copy('.env.example', '.env');" && \
     composer install \
         --no-dev \
@@ -42,14 +42,14 @@ RUN php -r "file_exists('.env') || copy('.env.example', '.env');" && \
         --no-progress \
         --optimize-autoloader \
         --prefer-dist && \
-    # 彻底删除 debugbar（dev 依赖，--no-dev 后仍可能残留自动发现缓存）
+    # 彻底删除 debugbar（dev 依赖，防止自动发现）
     rm -rf vendor/barryvdh/laravel-debugbar && \
     # 重新生成 autoload（不含 debugbar）
     composer dump-autoload --optimize --no-dev
 
 # =============================================================================
 # Stage 3: 生产运行镜像（Nginx + PHP-FPM，纯 HTTP，无 SSL）
-# 外部反向代理负责 HTTPS 终止
+# 关键设计：vendor/ 和代码留在镜像内，只有 storage/ .env database/ 通过卷持久化
 # =============================================================================
 FROM php:8.1-fpm
 
@@ -74,9 +74,9 @@ RUN apt-get update && \
     install-php-extensions imagick bcmath pdo_mysql pdo_pgsql redis && \
     \
     { \
-    echo 'post_max_size = 100M;'; \
-    echo 'upload_max_filesize = 100M;'; \
-    echo 'max_execution_time = 600;'; \
+    echo 'post_max_size = 100M'; \
+    echo 'upload_max_filesize = 100M'; \
+    echo 'max_execution_time = 600'; \
     } > /usr/local/etc/php/conf.d/docker-php-upload.ini && \
     \
     { \
@@ -87,31 +87,39 @@ RUN apt-get update && \
     echo 'opcache.save_comments=1'; \
     echo 'opcache.revalidate_freq=1'; \
     } > /usr/local/etc/php/conf.d/opcache-recommended.ini && \
-    echo 'apc.enable_cli=1' >> /usr/local/etc/php/conf.d/docker-php-ext-apcu.ini && \
-    echo 'memory_limit=512M' > /usr/local/etc/php/conf.d/memory-limit.ini && \
-    mkdir -p /var/www/data && \
-    chown -R www-data:www-data /var/www
+    echo 'memory_limit=512M' > /usr/local/etc/php/conf.d/memory-limit.ini
 
 # --------------------------------------------------------------------------
-# PHP-FPM 配置（覆盖默认 www.conf，使用 TCP 9000）
+# PHP-FPM 配置（TCP 9000，与 Nginx fastcgi_pass 一致）
 # --------------------------------------------------------------------------
 COPY .docker/php-fpm-www.conf /usr/local/etc/php-fpm.d/www.conf
 
 # --------------------------------------------------------------------------
-# Nginx 配置（纯 HTTP，监听 WEB_PORT，DocumentRoot 指向 public/）
+# Nginx 配置（纯 HTTP，监听 WEB_PORT）
 # --------------------------------------------------------------------------
-COPY .docker/nginx.conf      /etc/nginx/nginx.conf
-COPY .docker/default.conf    /etc/nginx/conf.d/default.conf.template
+COPY .docker/nginx.conf   /etc/nginx/nginx.conf
+COPY .docker/default.conf /etc/nginx/conf.d/default.conf.template
 
 # --------------------------------------------------------------------------
-# Supervisor 配置（同时管理 nginx 和 php-fpm 进程）
+# Supervisor 配置
 # --------------------------------------------------------------------------
 COPY .docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # --------------------------------------------------------------------------
-# 应用代码（来自 composer-builder stage）
+# 应用代码（vendor 在镜像内，不挂载覆盖）
 # --------------------------------------------------------------------------
-COPY --from=composer-builder --chown=www-data:www-data /build /var/www/lsky/
+COPY --from=composer-builder --chown=www-data:www-data /app /var/www/html
+
+# 创建持久化目录占位（storage、database 通过卷挂载）
+RUN mkdir -p /var/www/html/storage/app/public \
+             /var/www/html/storage/framework/cache \
+             /var/www/html/storage/framework/sessions \
+             /var/www/html/storage/framework/views \
+             /var/www/html/storage/logs \
+             /var/www/html/bootstrap/cache && \
+    chown -R www-data:www-data /var/www/html && \
+    chmod -R 755 /var/www/html && \
+    chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
 
 # --------------------------------------------------------------------------
 # Entrypoint
@@ -120,7 +128,6 @@ COPY .docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 WORKDIR /var/www/html
-VOLUME  /var/www/html
 
 ENV WEB_PORT=8089
 

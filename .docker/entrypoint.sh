@@ -11,55 +11,41 @@ envsubst '${WEB_PORT}' \
     > /etc/nginx/conf.d/default.conf
 
 # -----------------------------------------------------------------------
-# 首次初始化：将镜像内的应用代码同步到挂载卷
+# 初始化 .env（首次启动时从 .env.example 复制）
 # -----------------------------------------------------------------------
-if [ ! -e '/var/www/html/public/index.php' ]; then
-    echo "[entrypoint] 首次启动，正在初始化应用目录..."
-    cp -a /var/www/lsky/* /var/www/html/
-    cp -a /var/www/lsky/.env.example /var/www/html/
-    echo "[entrypoint] 应用目录初始化完成"
+if [ ! -f /var/www/html/.env ]; then
+    echo "[entrypoint] 未检测到 .env，从 .env.example 复制..."
+    cp /var/www/html/.env.example /var/www/html/.env
+    echo "[entrypoint] 请编辑 /var/www/html/.env 配置数据库等信息"
 fi
 
 # -----------------------------------------------------------------------
-# 版本升级检测
+# 确保持久化目录存在并权限正确
 # -----------------------------------------------------------------------
-IMAGE_VERSION_FILE="/var/www/lsky/VERSION"
-VOLUME_VERSION_FILE="/var/www/html/VERSION"
+mkdir -p /var/www/html/storage/app/public \
+         /var/www/html/storage/framework/cache \
+         /var/www/html/storage/framework/sessions \
+         /var/www/html/storage/framework/views \
+         /var/www/html/storage/logs \
+         /var/www/html/bootstrap/cache
 
-if [ -f "${IMAGE_VERSION_FILE}" ]; then
-    IMAGE_VERSION=$(cat "${IMAGE_VERSION_FILE}")
-    VOLUME_VERSION=$(cat "${VOLUME_VERSION_FILE}" 2>/dev/null || echo "0.0.0")
+chown -R www-data:www-data \
+    /var/www/html/storage \
+    /var/www/html/bootstrap/cache
 
-    if [ "${IMAGE_VERSION}" != "${VOLUME_VERSION}" ]; then
-        echo "[entrypoint] 检测到版本更新: ${VOLUME_VERSION} -> ${IMAGE_VERSION}，正在同步代码..."
-
-        # 备份持久化数据
-        [ -f /var/www/html/.env ]                     && cp    /var/www/html/.env                     /tmp/lsky_env_backup
-        [ -d /var/www/html/storage ]                  && cp -a /var/www/html/storage                  /tmp/lsky_storage_backup
-        [ -f /var/www/html/database/database.sqlite ] && cp    /var/www/html/database/database.sqlite /tmp/lsky_sqlite_backup
-
-        # 全量覆盖
-        cp -a /var/www/lsky/* /var/www/html/
-        cp -a /var/www/lsky/.env.example /var/www/html/
-
-        # 还原持久化数据
-        [ -f /tmp/lsky_env_backup ]     && cp    /tmp/lsky_env_backup                /var/www/html/.env
-        [ -d /tmp/lsky_storage_backup ] && cp -a /tmp/lsky_storage_backup/.          /var/www/html/storage/
-        [ -f /tmp/lsky_sqlite_backup ]  && cp    /tmp/lsky_sqlite_backup             /var/www/html/database/database.sqlite
-
-        rm -rf /tmp/lsky_env_backup /tmp/lsky_storage_backup /tmp/lsky_sqlite_backup
-        # 确保删除旧卷中可能残留的 debugbar
-        rm -rf /var/www/html/vendor/barryvdh/laravel-debugbar
-        echo "[entrypoint] 代码同步完成"
-    fi
-fi
+chmod -R 775 \
+    /var/www/html/storage \
+    /var/www/html/bootstrap/cache
 
 # -----------------------------------------------------------------------
-# 修正文件权限
+# 清除 Laravel 缓存（确保 bootstrap/cache 中无旧的 packages.php 等）
 # -----------------------------------------------------------------------
-chown -R www-data:www-data /var/www/html
-chmod -R 755 /var/www/html/
-chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache 2>/dev/null || true
+cd /var/www/html
+php artisan config:clear  2>/dev/null || true
+php artisan cache:clear   2>/dev/null || true
+php artisan view:clear    2>/dev/null || true
+# 重新生成 package discovery（不含 debugbar）
+php artisan package:discover --ansi 2>/dev/null || true
 
 # -----------------------------------------------------------------------
 # 自动执行数据库迁移
@@ -68,7 +54,8 @@ if [ -f /var/www/html/.env ] && grep -q "^DB_CONNECTION=" /var/www/html/.env; th
     DB_CONN=$(grep "^DB_CONNECTION=" /var/www/html/.env | cut -d= -f2 | tr -d '[:space:]')
     if [ -n "${DB_CONN}" ] && [ "${DB_CONN}" != "null" ]; then
         echo "[entrypoint] 正在执行数据库迁移..."
-        cd /var/www/html && php artisan migrate --force 2>&1 || \
+        php artisan migrate --force 2>&1 && \
+            echo "[entrypoint] 数据库迁移完成" || \
             echo "[entrypoint] 警告：数据库迁移失败，请手动检查"
     fi
 fi
