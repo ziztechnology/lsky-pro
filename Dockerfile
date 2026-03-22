@@ -1,6 +1,5 @@
 # =============================================================================
 # Stage 1: Node.js 前端资源构建
-# 编译 TailwindCSS / Laravel Mix 产物
 # =============================================================================
 FROM node:18-alpine AS node-builder
 
@@ -15,7 +14,6 @@ RUN npm run production
 
 # =============================================================================
 # Stage 2: PHP Composer 依赖安装
-# 严格对齐原始镜像：使用 php:8.1（非 apache 变体）作为构建环境
 # =============================================================================
 FROM php:8.1 AS composer-builder
 
@@ -30,12 +28,12 @@ RUN apt-get update && \
 # 复制完整应用代码
 COPY . .
 
-# 复制前端构建产物（覆盖 public/js 和 public/css）
-COPY --from=node-builder /app/public/js              ./public/js
-COPY --from=node-builder /app/public/css             ./public/css
+# 覆盖前端构建产物
+COPY --from=node-builder /app/public/js               ./public/js
+COPY --from=node-builder /app/public/css              ./public/css
 COPY --from=node-builder /app/public/mix-manifest.json ./public/mix-manifest.json
 
-# 安装生产依赖（不含 dev 包），与原始镜像保持一致
+# 安装生产依赖（不含 dev 包）
 RUN php -r "file_exists('.env') || copy('.env.example', '.env');" && \
     composer install \
         --no-dev \
@@ -46,37 +44,35 @@ RUN php -r "file_exists('.env') || copy('.env.example', '.env');" && \
         --prefer-dist
 
 # =============================================================================
-# Stage 3: 生产运行镜像
-# 完全对齐 halcyonazure/lsky-pro-docker 的构建方式
+# Stage 3: 生产运行镜像（Nginx + PHP-FPM，纯 HTTP，无 SSL）
+# 外部反向代理负责 HTTPS 终止
 # =============================================================================
-FROM php:8.1-apache
+FROM php:8.1-fpm
 
 LABEL org.opencontainers.image.source="https://github.com/ziztechnology/lsky-pro"
-LABEL org.opencontainers.image.description="Lsky Pro - Ziztechnology 定制版（含相册授权功能）"
+LABEL org.opencontainers.image.description="Lsky Pro - Ziztechnology 定制版（Nginx+FPM，无SSL）"
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
 # --------------------------------------------------------------------------
-# PHP 扩展安装器（与原始镜像完全一致）
+# 安装 Nginx + PHP 扩展 + 系统依赖
 # --------------------------------------------------------------------------
 ADD https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions \
     /usr/local/bin/
 
-# 开启 SSL（与原始镜像完全一致）
-RUN a2enmod ssl && a2ensite default-ssl
-
-# 系统依赖 + PHP 扩展 + Apache 模块 + PHP 配置（与原始镜像完全一致）
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gettext && \
+    apt-get install -y --no-install-recommends \
+        nginx \
+        gettext-base \
+        supervisor && \
     apt-get clean && \
     rm -rf /var/cache/apt/* /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
-    a2enmod rewrite && \
     chmod +x /usr/local/bin/install-php-extensions && \
     install-php-extensions imagick bcmath pdo_mysql pdo_pgsql redis && \
     \
     { \
     echo 'post_max_size = 100M;'; \
     echo 'upload_max_filesize = 100M;'; \
-    echo 'max_execution_time = 600S;'; \
+    echo 'max_execution_time = 600;'; \
     } > /usr/local/etc/php/conf.d/docker-php-upload.ini && \
     \
     { \
@@ -87,41 +83,44 @@ RUN apt-get update && \
     echo 'opcache.save_comments=1'; \
     echo 'opcache.revalidate_freq=1'; \
     } > /usr/local/etc/php/conf.d/opcache-recommended.ini && \
-    \
     echo 'apc.enable_cli=1' >> /usr/local/etc/php/conf.d/docker-php-ext-apcu.ini && \
-    \
     echo 'memory_limit=512M' > /usr/local/etc/php/conf.d/memory-limit.ini && \
-    \
-    mkdir /var/www/data && \
-    chown -R www-data:root /var/www && \
-    chmod -R g=u /var/www
+    mkdir -p /var/www/data && \
+    chown -R www-data:www-data /var/www
 
 # --------------------------------------------------------------------------
-# 文件复制（严格对齐原始镜像的 COPY 顺序）
+# PHP-FPM 配置（覆盖默认 www.conf，使用 Unix socket）
 # --------------------------------------------------------------------------
-# SSL 证书（自签名，用于 HTTPS 监听）
-COPY .docker/ssl /etc/ssl
+COPY .docker/php-fpm-www.conf /usr/local/etc/php-fpm.d/www.conf
 
+# --------------------------------------------------------------------------
+# Nginx 配置（纯 HTTP，监听 WEB_PORT，DocumentRoot 指向 public/）
+# --------------------------------------------------------------------------
+COPY .docker/nginx.conf      /etc/nginx/nginx.conf
+COPY .docker/default.conf    /etc/nginx/conf.d/default.conf.template
+
+# --------------------------------------------------------------------------
+# Supervisor 配置（同时管理 nginx 和 php-fpm 进程）
+# --------------------------------------------------------------------------
+COPY .docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# --------------------------------------------------------------------------
 # 应用代码（来自 composer-builder stage）
-COPY --from=composer-builder /build /var/www/lsky/
+# --------------------------------------------------------------------------
+COPY --from=composer-builder --chown=www-data:www-data /build /var/www/lsky/
 
-# Apache 配置模板
-COPY .docker/000-default.conf.template /etc/apache2/sites-enabled/
-COPY .docker/ports.conf.template       /etc/apache2/
-
+# --------------------------------------------------------------------------
 # Entrypoint
+# --------------------------------------------------------------------------
 COPY .docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-WORKDIR /var/www/html/
+WORKDIR /var/www/html
 VOLUME  /var/www/html
 
 ENV WEB_PORT=8089
-ENV HTTPS_PORT=8088
 
 EXPOSE ${WEB_PORT}
-EXPOSE ${HTTPS_PORT}
-
-RUN chmod a+x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["apachectl", "-D", "FOREGROUND"]
+CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
